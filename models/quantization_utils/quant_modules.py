@@ -89,6 +89,9 @@ class QuantLinear(nn.Linear):
             self.weight, self.weight_bit, self.fc_scaling_factor, True
         )
 
+        prev_act_scaling_factor = prev_act_scaling_factor.to(
+            x.device
+        )  # @LeeJiho 24.09.09 : maching device
         bias_scaling_factor = self.fc_scaling_factor * prev_act_scaling_factor
 
         if self.bias is not None:
@@ -160,17 +163,7 @@ class QuantAct(nn.Module):
             raise ValueError("unknown quant mode: {}".format(self.quant_mode))
 
     def __repr__(self):
-        return (
-            "{0}(activation_bit={1}, "
-            "quant_mode: {2}, Act_min: {3:.2f}, "
-            "Act_max: {4:.2f})".format(
-                self.__class__.__name__,
-                self.activation_bit,
-                self.quant_mode,
-                self.x_min.item(),
-                self.x_max.item(),
-            )
-        )
+        return f"{self.__class__.__name__}(activation_bit={self.activation_bit}, quant_mode: {self.quant_mode}, Act_min: {self.min_val.item()}, Act_max: {self.max_val.item()})"
 
     def fix(self):
         """
@@ -235,7 +228,8 @@ class QuantAct(nn.Module):
                 identity_scaling_factor,
             )
 
-        correct_output_scale = self.act_scaling_factor.view(-1)
+        correct_output_scale = self.act_scaling_factor.view(-1).to(x.device)
+        # @LeeJiho 24.09.09 : maching device
 
         return quant_act_int * correct_output_scale, self.act_scaling_factor
 
@@ -256,6 +250,10 @@ class QuantMatMul(nn.Module):
         pass
 
     def forward(self, A, pre_act_scaling_factor_A, B, pre_act_scaling_factor_B):
+        pre_act_scaling_factor_A = pre_act_scaling_factor_A.to(A.device)
+        pre_act_scaling_factor_B = pre_act_scaling_factor_B.to(B.device)
+        # @LeeJiho 24.09.09 : maching device
+
         A_int = A / pre_act_scaling_factor_A
         B_int = B / pre_act_scaling_factor_B
         act_scaling_factor = pre_act_scaling_factor_A * pre_act_scaling_factor_B
@@ -364,6 +362,8 @@ class QuantConv2d(nn.Conv2d):
         self.weight_integer = self.weight_function(
             self.weight, self.weight_bit, self.conv_scaling_factor, True
         )
+        pre_act_scaling_factor = pre_act_scaling_factor.to(x.device)
+        # @LeeJiho 24.09.09 : maching device
         bias_scaling_factor = self.conv_scaling_factor * pre_act_scaling_factor
         self.bias_integer = self.weight_function(
             self.bias, self.bias_bit, bias_scaling_factor, True
@@ -412,6 +412,9 @@ class IntLayerNorm(nn.LayerNorm):
             self.dim_sqrt = torch.sqrt(n).cuda()
 
         # Normalization: computes mean and variance(std)
+        scaling_factor = scaling_factor.to(
+            x.device
+        )  # @LeeJiho 24.09.09 : maching device
         x_int = x / scaling_factor
         mean_int = round_ste.apply(x_int.mean(axis=2, keepdim=True))
         y_int = x_int - mean_int
@@ -448,12 +451,13 @@ class IntGELU(nn.Module):
     Class to quantize given GELU layer
     """
 
-    def __init__(self, output_bit=8):
+    def __init__(self, output_bit=8, intgelu_exp_n=23):
         super(IntGELU, self).__init__()
         self.output_bit = output_bit
 
-        self.n = 23  # sufficiently large integer
+        self.n = intgelu_exp_n  # sufficiently large integer
         # The minimum value for ensuring accuracy (varies depending on models)
+        print("IntGELU    | n: ", self.n)
 
         self.register_buffer("act_scaling_factor", torch.zeros(1))
 
@@ -479,6 +483,9 @@ class IntGELU(nn.Module):
         return exp_int, scaling_factor
 
     def forward(self, x, scaling_factor=None):
+        scaling_factor = scaling_factor.to(
+            x.device
+        )  # @LeeJiho 24.09.09 : maching device
         pre_x_int = x / scaling_factor
         scaling_factor_sig = scaling_factor * 1.702
 
@@ -511,13 +518,13 @@ class IntSoftmax(nn.Module):
     Class to quantize given Softmax layer
     """
 
-    def __init__(self, output_bit=8):
+    def __init__(self, output_bit=8, intsoftmax_exp_n=15):
         super(IntSoftmax, self).__init__()
         self.output_bit = output_bit
 
-        self.n = 15  # sufficiently large integer
+        self.n = intsoftmax_exp_n  # sufficiently large integer
         # The minimum value for ensuring accuracy (varies depending on models)
-
+        print("IntSoftmax | n: ", self.n)
         self.register_buffer("act_scaling_factor", torch.zeros(1))
 
     def fix(self):
@@ -541,6 +548,9 @@ class IntSoftmax(nn.Module):
         return exp_int, scaling_factor
 
     def forward(self, x, scaling_factor):
+        scaling_factor = scaling_factor.to(
+            x.device
+        )  # @LeeJiho 24.09.09 : maching device
         x_int = x / scaling_factor
         x_int_max, _ = x_int.max(dim=-1, keepdim=True)
         x_int = x_int - x_int_max
@@ -555,3 +565,334 @@ class IntSoftmax(nn.Module):
 
         self.act_scaling_factor = scaling_factor
         return exp_int * scaling_factor, scaling_factor
+
+
+class Log2_Int_Quantizer(nn.Module):
+    def __init__(self):
+        super().__init__()
+        """ log sqrt 2 quantizer for attention map """
+
+        self.activation_bit = 4
+
+        self.n_levels = 2**self.activation_bit
+        self.int_bias = torch.tensor(1.0)
+
+    def __repr__(self):
+        return f"{self.__class__.__name__}(activation_bit={self.activation_bit}"
+
+    def int_log_quant_10x(self, x):
+        x = x.to(torch.int32)
+        zero_mask = x == 0
+        log2_int = torch.full_like(x, -1, dtype=torch.int32)
+
+        temp_x = x.clone()
+        for i in range(15, -1, -1):
+            shift = 1 << i
+            greater_equal = temp_x >= shift
+            log2_int += greater_equal.to(torch.int32)
+            temp_x = temp_x >> greater_equal.to(torch.int32)
+
+        fractional_add = torch.zeros_like(x, dtype=torch.int32)
+
+        temp_x = x - (1 << log2_int)
+        temp_x = temp_x << 1  # temp_x *= 2
+        fractional_add += (temp_x >= (1 << log2_int)).to(torch.int32) * 5
+        out = -1 * (log2_int * 10 + fractional_add)
+        out[zero_mask] = 99999
+        return out
+
+    def int_log_dequant_10x(self, y):
+        zero_mask = y == 99999
+        y = -y
+
+        int_part = y // 10
+        frac_part = y % 10 / 5
+
+        int_num = 1 << int_part
+        frac_num = frac_part * (1 << (int_part - 1))
+        out = (int_num + frac_num).floor()
+        out[zero_mask] = 0
+        return out
+
+    def forward(self, x_hat: torch.Tensor, s_x: torch.Tensor):
+        assert 0 <= x_hat.min() and x_hat.max() <= 1, f"{x_hat.min()} {x_hat.max()}"
+
+        x_int = round_ste.apply(x_hat / s_x)
+
+        # [1] log quantization in huge domain
+        x_int_log_q = (self.int_log_quant_10x(x_int) // 10) * 10
+        x_int_log_dq = self.int_log_dequant_10x(x_int_log_q)
+
+        # ver2.  * Prec@1 69.454 Prec@5 89.464
+        out = x_int_log_dq * 256 // x_int_log_dq.max()
+        if out.unique().numel() > self.n_levels:
+            out = out // 2
+        out = out.clamp(0, 255)
+
+        # print(out.unique().numel(), out.unique())
+        # 10 tensor([  0.,   1.,   2.,   4.,   8.,  16.,  32.,  64., 128., 255.],
+
+        assert (
+            out.unique().numel() <= self.n_levels
+        ), f"{out.unique().numel(), out.unique()}"
+
+        s_x = s_x * 255
+
+        x_hat = out * s_x
+
+        return x_hat, s_x
+
+
+class Log2_half_Int_Quantizer(nn.Module):
+    def __init__(self):
+        super().__init__()
+        """ log sqrt 2 quantizer for attention map """
+
+        self.activation_bit = 4
+
+        self.n_levels = 2**self.activation_bit
+        self.int_bias = torch.tensor(1.0)
+
+    def __repr__(self):
+        return f"{self.__class__.__name__}(activation_bit={self.activation_bit}"
+
+    def int_log_quant_10x(self, x):
+        x = x.to(torch.int32)
+        zero_mask = x == 0
+        log2_int = torch.full_like(x, -1, dtype=torch.int32)
+
+        temp_x = x.clone()
+        for i in range(15, -1, -1):
+            shift = 1 << i
+            greater_equal = temp_x >= shift
+            log2_int += greater_equal.to(torch.int32)
+            temp_x = temp_x >> greater_equal.to(torch.int32)
+
+        fractional_add = torch.zeros_like(x, dtype=torch.int32)
+
+        temp_x = x - (1 << log2_int)
+        temp_x = temp_x << 1  # temp_x *= 2
+        fractional_add += (temp_x >= (1 << log2_int)).to(torch.int32) * 5
+        out = -1 * (log2_int * 10 + fractional_add)
+        out[zero_mask] = 99999
+        return out
+
+    def int_log_dequant_10x(self, y):
+        zero_mask = y == 99999
+        y = -y
+
+        int_part = y // 10
+        frac_part = y % 10 / 5
+
+        int_num = 1 << int_part
+        frac_num = frac_part * (1 << (int_part - 1))
+        out = (int_num + frac_num).floor()
+        out[zero_mask] = 0
+        return out
+
+    def forward(self, x_hat: torch.Tensor, s_x: torch.Tensor):
+        assert 0 <= x_hat.min() and x_hat.max() <= 1, f"{x_hat.min()} {x_hat.max()}"
+
+        x_int = round_ste.apply(x_hat / s_x)
+
+        # [1] log quantization in huge domain
+        x_int_log_q = self.int_log_quant_10x(x_int)
+        # print(x_int_log_q.unique().numel(), x_int_log_q.unique())
+        # 32 tensor([ -155,  -150,  -145,  -140,  -135,  -130,  -125,  -120,  -115,  -110,
+        #          -105,  -100,   -95,   -90,   -85,   -80,   -75,   -70,   -65,   -60,
+        #           -55,   -50,   -45,   -40,   -35,   -30,   -25,   -20,   -15,   -10,
+        #             0, 99999]
+
+        # [2] log dequantization
+        x_int_log_dq = self.int_log_dequant_10x(x_int_log_q)
+
+        # print(x_int_log_dq.unique().numel(), x_int_log_dq.unique())
+        # 32 tensor([0.0000e+00, 1.0000e+00, 2.0000e+00, 3.0000e+00, 4.0000e+00, 6.0000e+00,
+        #         8.0000e+00, 1.2000e+01, 1.6000e+01, 2.4000e+01, 3.2000e+01, 4.8000e+01,
+        #         6.4000e+01, 9.6000e+01, 1.2800e+02, 1.9200e+02, 2.5600e+02, 3.8400e+02,
+        #         5.1200e+02, 7.6800e+02, 1.0240e+03, 1.5360e+03, 2.0480e+03, 3.0720e+03,
+        #         4.0960e+03, 6.1440e+03, 8.1920e+03, 1.2288e+04, 1.6384e+04, 2.4576e+04,
+        #         3.2768e+04, 4.9152e+04], device='cuda:0')
+
+        # [3] [0, 255]
+        # #  * Prec@1 69.146 Prec@5 89.320
+        # x_int_log_dq = x_int_log_dq * x_int_log_dq.unique()[-16] // x_int_log_dq.max()
+        # out = x_int_log_dq.clamp(0, 255)
+
+        # ver2.  * Prec@1 69.454 Prec@5 89.464
+        out = x_int_log_dq * 256 // x_int_log_dq.max()
+        if out.unique().numel() > self.n_levels:
+            print(out.unique().numel(), out.unique())
+            out = out // 2
+        out = out.clamp(0, 255)
+
+        assert (
+            out.unique().numel() <= self.n_levels
+        ), f"{out.unique().numel(), out.unique()}"
+
+        s_x = s_x * 255
+
+        x_hat = out * s_x
+
+        return x_hat, s_x
+
+
+class Log2Quantizer(nn.Module):
+    """
+    PyTorch Function that can be used for asymmetric quantization (also called uniform affine
+    quantization). Quantizes its argument in the forward pass, passes the gradient 'straight
+    through' on the backward pass, ignoring the quantization that occurred.
+    Based on https://arxiv.org/abs/1806.08342.
+    :param n_bits: number of bit for quantization
+    :param channel_wise: if True, compute scale and zero_point in each channel
+
+    for [0, 1)
+    """
+
+    def __init__(self, n_bits: int = 4, channel_wise: bool = False):
+        super(Log2Quantizer, self).__init__()
+        assert 2 <= n_bits <= 8, "bitwidth not supported"
+        self.n_bits = n_bits
+        self.n_levels = 2**self.n_bits
+        self.delta = None
+        self.inited = False
+        self.channel_wise = channel_wise
+
+    def forward(self, x: torch.Tensor, s_x):
+
+        if self.inited is False:
+            self.delta = self.init_quantization_scale(x)
+            self.inited = True
+
+        # start quantization
+        x_dequant = self.quantize(x, self.delta)
+        return x_dequant, s_x
+
+    def init_quantization_scale(self, x: torch.Tensor):
+        def lp_loss(pred, tgt, p=2.0, reduction="none"):
+            """
+            loss function measured in L_p Norm
+            """
+            if reduction == "none":
+                return (pred - tgt).abs().pow(p).sum(1).mean()
+            else:
+                return (pred - tgt).abs().pow(p).mean()
+
+        delta = None
+        x_clone = x.clone().detach()
+        delta = x_clone.max()
+        best_score = 1e10
+        for pct in [0.999, 0.9999, 0.99999]:  #
+            try:
+                new_delta = torch.quantile(x_clone.reshape(-1), pct)
+            except:
+                new_delta = torch.tensor(
+                    np.percentile(x_clone.reshape(-1).cpu(), pct * 100),
+                    device=x_clone.device,
+                    dtype=torch.float32,
+                )
+            x_q = self.quantize(x_clone, new_delta)
+            score = lp_loss(x_clone, x_q, p=2, reduction="all")
+
+            if score < best_score:
+                best_score = score
+                delta = new_delta
+
+        return delta
+
+    def quantize(self, x, delta):
+        from math import sqrt
+
+        x_int = torch.round(-1 * (x / delta).log2())
+        mask = x_int >= self.n_levels
+        # print(x_int.unique())
+        #   tensor([-1., -0.,  1.,  2.,  3.,  4.,  5.,  6.,  7.,  8.,  9., 10., 11., 12.,
+        #   13., 14., 15., inf], device='cuda:0')
+        x_quant = torch.clamp(x_int, 0, self.n_levels - 1)
+        # print(x_quant.unique())
+        #   tensor([ 0.,  1.,  2.,  3.,  4.,  5.,  6.,  7.,  8.,  9., 10., 11., 12., 13.,
+        #   14., 15.], device='cuda:0')
+        x_float_q = 2 ** (-1 * x_quant) * delta
+        x_float_q[mask] = 0
+        # Log2 UINT8 test
+        # print((x_float_q * 255).round().unique())
+        # exit()
+        return x_float_q
+
+
+class LogSqrt2Quantizer(nn.Module):
+    """
+    From RepQ-ViT
+
+    PyTorch Function that can be used for asymmetric quantization (also called uniform affine
+    quantization). Quantizes its argument in the forward pass, passes the gradient 'straight
+    through' on the backward pass, ignoring the quantization that occurred.
+    Based on https://arxiv.org/abs/1806.08342.
+    :param n_bits: number of bit for quantization
+    :param channel_wise: if True, compute scale and zero_point in each channel
+
+    for [0, 1)
+    """
+
+    def __init__(self, n_bits: int = 4, channel_wise: bool = False):
+        super(LogSqrt2Quantizer, self).__init__()
+        assert 2 <= n_bits <= 8, "bitwidth not supported"
+        self.n_bits = n_bits
+        self.n_levels = 2**self.n_bits
+        self.delta = None
+        self.inited = False
+        self.channel_wise = channel_wise
+
+    def forward(self, x: torch.Tensor, s_x):
+
+        if self.inited is False:
+            self.delta = self.init_quantization_scale(x)
+            self.inited = True
+
+        # start quantization
+        x_dequant = self.quantize(x, self.delta)
+        return x_dequant, s_x
+
+    def init_quantization_scale(self, x: torch.Tensor):
+        def lp_loss(pred, tgt, p=2.0, reduction="none"):
+            """
+            loss function measured in L_p Norm
+            """
+            if reduction == "none":
+                return (pred - tgt).abs().pow(p).sum(1).mean()
+            else:
+                return (pred - tgt).abs().pow(p).mean()
+
+        delta = None
+        x_clone = x.clone().detach()
+        delta = x_clone.max()
+        best_score = 1e10
+        for pct in [0.999, 0.9999, 0.99999]:  #
+            try:
+                new_delta = torch.quantile(x_clone.reshape(-1), pct)
+            except:
+                new_delta = torch.tensor(
+                    np.percentile(x_clone.reshape(-1).cpu(), pct * 100),
+                    device=x_clone.device,
+                    dtype=torch.float32,
+                )
+            x_q = self.quantize(x_clone, new_delta)
+            score = lp_loss(x_clone, x_q, p=2, reduction="all")
+
+            if score < best_score:
+                best_score = score
+                delta = new_delta
+
+        return delta
+
+    def quantize(self, x, delta):
+        from math import sqrt
+
+        x_int = torch.round(-1 * (x / delta).log2() * 2)
+        mask = x_int >= self.n_levels
+        x_quant = torch.clamp(x_int, 0, self.n_levels - 1)
+        odd_mask = (x_quant % 2) * (sqrt(2) - 1) + 1
+        x_float_q = 2 ** (-1 * torch.ceil(x_quant / 2)) * odd_mask * delta
+        x_float_q[mask] = 0
+
+        return x_float_q

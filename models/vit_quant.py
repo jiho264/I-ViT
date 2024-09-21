@@ -20,6 +20,10 @@ from .quantization_utils import (
     IntSoftmax,
     IntGELU,
     QuantMatMul,
+    Log2_half_Int_Quantizer,
+    Log2_Int_Quantizer,
+    Log2Quantizer,
+    LogSqrt2Quantizer,
 )
 from .utils import load_weights_from_npz
 
@@ -42,6 +46,8 @@ class Attention(nn.Module):
         qk_scale=None,
         attn_drop=0.0,
         proj_drop=0.0,
+        intsoftmax_exp_n=15,
+        attn_quant=None,
     ):
         super().__init__()
         self.num_heads = num_heads
@@ -55,10 +61,31 @@ class Attention(nn.Module):
         self.qact2 = QuantAct()
         self.proj = QuantLinear(dim, dim)
         self.qact3 = QuantAct(16)
-        self.qact_softmax = QuantAct()
+        # self.qact_softmax = QuantAct() # not used
         self.attn_drop = nn.Dropout(attn_drop)
         self.proj_drop = nn.Dropout(proj_drop)
-        self.int_softmax = IntSoftmax(16)
+        self.int_softmax = IntSoftmax(output_bit=17, intsoftmax_exp_n=intsoftmax_exp_n)
+
+        ## choose one of the following quantizers
+        ## 5bit symm == [-16, 15], but Attn map is positive, so we can use [0, 15]
+        if attn_quant is None:
+            self.qact_softmax = None
+        elif attn_quant == "Symmetric_UINT4":
+            self.qact_softmax = QuantAct(5)
+        elif attn_quant == "Symmetric_UINT8":
+            self.qact_softmax = QuantAct(9)
+        elif attn_quant == "Log2_half_Int_Quantizer":
+            self.qact_softmax = Log2_half_Int_Quantizer()
+        elif attn_quant == "Log2_Int_Quantizer":
+            self.qact_softmax = Log2_Int_Quantizer()
+        elif attn_quant == "Log2Quantizer":
+            self.qact_softmax = Log2Quantizer()
+        elif attn_quant == "LogSqrt2Quantizer":
+            self.qact_softmax = LogSqrt2Quantizer()
+        elif attn_quant == "NoQuant":
+            self.qact_softmax = None
+        else:
+            raise ValueError(f"Unknown quantizer: {attn_quant}")
 
         self.matmul_1 = QuantMatMul()
         self.matmul_2 = QuantMatMul()
@@ -84,6 +111,14 @@ class Attention(nn.Module):
 
         attn, act_scaling_factor = self.int_softmax(attn, act_scaling_factor)
 
+        if self.qact_softmax is not None:
+            attn, act_scaling_factor = self.qact_softmax(attn, act_scaling_factor)
+
+            if isinstance(self.qact_softmax, Log2_half_Int_Quantizer):
+                tmp_out = attn / act_scaling_factor
+                assert tmp_out.min() >= 0
+                assert tmp_out.max() <= 255
+
         attn = self.attn_drop(attn)
         x, act_scaling_factor = self.matmul_2(
             attn, act_scaling_factor, v, act_scaling_factor_1
@@ -99,6 +134,7 @@ class Attention(nn.Module):
 
 
 class Block(nn.Module):
+
     def __init__(
         self,
         dim,
@@ -111,6 +147,9 @@ class Block(nn.Module):
         drop_path=0.0,
         act_layer=nn.GELU,
         norm_layer=nn.LayerNorm,
+        intsoftmax_exp_n=15,
+        intgelu_exp_n=23,
+        attn_quant=None,
     ):
         super().__init__()
         self.norm1 = norm_layer(dim)
@@ -122,6 +161,8 @@ class Block(nn.Module):
             qk_scale=qk_scale,
             attn_drop=attn_drop,
             proj_drop=drop,
+            intsoftmax_exp_n=intsoftmax_exp_n,
+            attn_quant=attn_quant,
         )
         # NOTE: drop path for stochastic depth, we shall see if this is better than dropout here
         self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
@@ -134,6 +175,7 @@ class Block(nn.Module):
             hidden_features=mlp_hidden_dim,
             act_layer=act_layer,
             drop=drop,
+            intgelu_exp_n=intgelu_exp_n,
         )
         self.qact4 = QuantAct(16)
 
@@ -180,6 +222,9 @@ class VisionTransformer(nn.Module):
         attn_drop_rate=0.0,
         drop_path_rate=0.0,
         norm_layer=None,
+        intsoftmax_exp_n=15,
+        intgelu_exp_n=23,
+        attn_quant=None,
     ):
         super().__init__()
         self.num_classes = num_classes
@@ -198,8 +243,8 @@ class VisionTransformer(nn.Module):
         )
         num_patches = self.patch_embed.num_patches
 
-        self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
-        self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + 1, embed_dim))
+        self.register_buffer("cls_token", torch.zeros(1, 1, embed_dim))
+        self.register_buffer("pos_embed", torch.zeros(1, num_patches + 1, embed_dim))
 
         self.pos_drop = nn.Dropout(p=drop_rate)
 
@@ -222,6 +267,9 @@ class VisionTransformer(nn.Module):
                     drop_path=dpr[i],
                     act_layer=IntGELU,
                     norm_layer=norm_layer,
+                    intsoftmax_exp_n=intsoftmax_exp_n,
+                    intgelu_exp_n=intgelu_exp_n,
+                    attn_quant=attn_quant,
                 )
                 for i in range(depth)
             ]
@@ -249,7 +297,7 @@ class VisionTransformer(nn.Module):
             if num_classes > 0
             else nn.Identity()
         )
-        self.act_out = QuantAct()
+        # self.act_out = QuantAct() # not used
         trunc_normal_(self.pos_embed, std=0.02)
         trunc_normal_(self.cls_token, std=0.02)
         self.apply(self._init_weights)
