@@ -55,7 +55,7 @@ parser.add_argument("--intgelu_exp_n", default=23, type=int)
 
 parser.add_argument(
     "--attn_quant",
-    default="Log2_half_Int_Quantizer",
+    default="Log2_Int_Quantizer",
     choices=[
         "Symmetric_UINT4",
         "Symmetric_UINT8",

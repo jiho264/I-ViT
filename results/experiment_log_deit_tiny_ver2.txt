@@ -182,17 +182,17 @@ IntGELU    | n:  23
     - type : Log2_Int_Quantizer
     Number of QuantMatMul: 24
 ................................calib done
-Test: [  0/391]	Time  4.166 ( 4.166)	Acc@1  90.62 ( 90.62)	Acc@5  97.66 ( 97.66)
-Test: [ 50/391]	Time  1.695 ( 1.721)	Acc@1  88.28 ( 77.83)	Acc@5  96.09 ( 93.35)
-Test: [100/391]	Time  1.655 ( 1.696)	Acc@1  78.12 ( 74.93)	Acc@5  92.19 ( 92.84)
-Test: [150/391]	Time  1.687 ( 1.687)	Acc@1  69.53 ( 74.99)	Acc@5  96.88 ( 92.99)
-Test: [200/391]	Time  1.658 ( 1.684)	Acc@1  60.94 ( 71.90)	Acc@5  89.06 ( 91.09)
-Test: [250/391]	Time  1.639 ( 1.681)	Acc@1  82.81 ( 70.47)	Acc@5  92.97 ( 89.97)
-Test: [300/391]	Time  1.694 ( 1.680)	Acc@1  68.75 ( 69.20)	Acc@5  87.50 ( 89.14)
-Test: [350/391]	Time  0.682 ( 1.595)	Acc@1  71.09 ( 68.25)	Acc@5  89.06 ( 88.49)
-Test: [390/391]	Time  1.419 ( 1.597)	Acc@1  47.50 ( 68.47)	Acc@5  75.00 ( 88.68)
- * Prec@1 68.466 Prec@5 88.676
-Time: 665.97
+Test: [  0/391]	Time  3.351 ( 3.351)	Acc@1  58.59 ( 58.59)	Acc@5  81.25 ( 81.25)
+Test: [ 50/391]	Time  1.688 ( 1.388)	Acc@1  72.66 ( 51.09)	Acc@5  91.41 ( 72.47)
+Test: [100/391]	Time  1.700 ( 1.543)	Acc@1  41.41 ( 47.51)	Acc@5  70.31 ( 70.35)
+Test: [150/391]	Time  1.698 ( 1.596)	Acc@1  50.00 ( 46.79)	Acc@5  74.22 ( 69.91)
+Test: [200/391]	Time  1.678 ( 1.622)	Acc@1  25.00 ( 44.55)	Acc@5  50.00 ( 68.04)
+Test: [250/391]	Time  1.690 ( 1.638)	Acc@1  64.84 ( 43.43)	Acc@5  81.25 ( 66.83)
+Test: [300/391]	Time  1.738 ( 1.648)	Acc@1  43.75 ( 42.23)	Acc@5  72.66 ( 65.76)
+Test: [350/391]	Time  1.700 ( 1.656)	Acc@1  21.09 ( 41.07)	Acc@5  44.53 ( 64.69)
+Test: [390/391]	Time  1.405 ( 1.660)	Acc@1  21.25 ( 41.51)	Acc@5  51.25 ( 65.19)
+ * Prec@1 41.506 Prec@5 65.190
+Time: 663.11
 -----------------------------------------------------
 Running experiment with attn_quant=Log2_Int_Quantizer_nonscaling
 Namespace(model='deit_tiny', dataset='data/ImageNet', nb_classes=1000, device='cuda', print_freq=50, seed=0, output_dir='results/', calib_batchsize=32, calib_images=1024, val_batchsize=128, num_workers=8, intsoftmax_exp_n=15, intgelu_exp_n=23, attn_quant='Log2_Int_Quantizer_nonscaling')
@@ -231,17 +231,17 @@ IntGELU    | n:  23
     - type : Log2_Int_Quantizer_nonscaling
     Number of QuantMatMul: 24
 ................................calib done
-Test: [  0/391]	Time  4.404 ( 4.404)	Acc@1  91.41 ( 91.41)	Acc@5  97.66 ( 97.66)
-Test: [ 50/391]	Time  1.747 ( 1.795)	Acc@1  89.84 ( 76.46)	Acc@5  96.88 ( 92.10)
-Test: [100/391]	Time  1.743 ( 1.765)	Acc@1  74.22 ( 69.43)	Acc@5  91.41 ( 87.88)
-Test: [150/391]	Time  1.733 ( 1.756)	Acc@1  68.75 ( 68.55)	Acc@5  96.88 ( 86.93)
-Test: [200/391]	Time  1.729 ( 1.753)	Acc@1  28.91 ( 64.73)	Acc@5  43.75 ( 83.70)
-Test: [250/391]	Time  1.718 ( 1.750)	Acc@1  81.25 ( 63.83)	Acc@5  90.62 ( 83.13)
-Test: [300/391]	Time  1.740 ( 1.748)	Acc@1  71.09 ( 62.21)	Acc@5  83.59 ( 81.90)
-Test: [350/391]	Time  1.746 ( 1.747)	Acc@1  39.06 ( 61.90)	Acc@5  63.28 ( 81.95)
-Test: [390/391]	Time  1.434 ( 1.746)	Acc@1  48.75 ( 62.24)	Acc@5  77.50 ( 82.13)
- * Prec@1 62.238 Prec@5 82.126
-Time: 724.83
+Test: [  0/391]	Time  4.223 ( 4.223)	Acc@1  87.50 ( 87.50)	Acc@5  97.66 ( 97.66)
+Test: [ 50/391]	Time  1.603 ( 1.696)	Acc@1  84.38 ( 72.79)	Acc@5  96.09 ( 90.84)
+Test: [100/391]	Time  1.612 ( 1.674)	Acc@1  78.12 ( 71.60)	Acc@5  94.53 ( 91.61)
+Test: [150/391]	Time  1.067 ( 1.521)	Acc@1  64.84 ( 71.57)	Acc@5  95.31 ( 91.67)
+Test: [200/391]	Time  1.604 ( 1.489)	Acc@1  45.31 ( 67.63)	Acc@5  76.56 ( 88.99)
+Test: [250/391]	Time  1.627 ( 1.514)	Acc@1  75.78 ( 65.91)	Acc@5  86.72 ( 87.47)
+Test: [300/391]	Time  1.626 ( 1.531)	Acc@1  63.28 ( 64.36)	Acc@5  78.12 ( 86.25)
+Test: [350/391]	Time  1.609 ( 1.543)	Acc@1  69.53 ( 63.13)	Acc@5  83.59 ( 85.31)
+Test: [390/391]	Time  1.343 ( 1.549)	Acc@1  37.50 ( 63.33)	Acc@5  73.75 ( 85.46)
+ * Prec@1 63.328 Prec@5 85.462
+Time: 646.95
 -----------------------------------------------------
 Running experiment with attn_quant=Log2Quantizer
 Namespace(model='deit_tiny', dataset='data/ImageNet', nb_classes=1000, device='cuda', print_freq=50, seed=0, output_dir='results/', calib_batchsize=32, calib_images=1024, val_batchsize=128, num_workers=8, intsoftmax_exp_n=15, intgelu_exp_n=23, attn_quant='Log2Quantizer')

@@ -567,6 +567,42 @@ class IntSoftmax(nn.Module):
         return exp_int * scaling_factor, scaling_factor
 
 
+def int_log_quant_10x(x):
+    x = x.to(torch.int32)
+    zero_mask = x == 0
+    log2_int = torch.full_like(x, -1, dtype=torch.int32)
+
+    temp_x = x.clone()
+    for i in range(15, -1, -1):
+        shift = 1 << i
+        greater_equal = temp_x >= shift
+        log2_int += greater_equal.to(torch.int32)
+        temp_x = temp_x >> greater_equal.to(torch.int32)
+
+    fractional_add = torch.zeros_like(x, dtype=torch.int32)
+
+    temp_x = x - (1 << log2_int)
+    temp_x = temp_x << 1  # temp_x *= 2
+    fractional_add += (temp_x >= (1 << log2_int)).to(torch.int32) * 5
+    out = -1 * (log2_int * 10 + fractional_add)
+    out[zero_mask] = 99999
+    return out
+
+
+def int_log_dequant_10x(y):
+    zero_mask = y > 0
+    y = -y
+
+    int_part = y // 10
+    frac_part = y % 10 / 5
+
+    int_num = 1 << int_part
+    frac_num = frac_part * (1 << (int_part - 1))
+    out = (int_num + frac_num).floor()
+    out[zero_mask] = 0
+    return out
+
+
 class Log2_Int_Quantizer(nn.Module):
     def __init__(self):
         super().__init__()
@@ -577,42 +613,11 @@ class Log2_Int_Quantizer(nn.Module):
         self.n_levels = 2**self.activation_bit
         self.int_bias = torch.tensor(1.0)
 
+        self.int_log_quant_10x = int_log_quant_10x
+        self.int_log_dequant_10x = int_log_dequant_10x
+
     def __repr__(self):
         return f"{self.__class__.__name__}(activation_bit={self.activation_bit}"
-
-    def int_log_quant_10x(self, x):
-        x = x.to(torch.int32)
-        zero_mask = x == 0
-        log2_int = torch.full_like(x, -1, dtype=torch.int32)
-
-        temp_x = x.clone()
-        for i in range(15, -1, -1):
-            shift = 1 << i
-            greater_equal = temp_x >= shift
-            log2_int += greater_equal.to(torch.int32)
-            temp_x = temp_x >> greater_equal.to(torch.int32)
-
-        fractional_add = torch.zeros_like(x, dtype=torch.int32)
-
-        temp_x = x - (1 << log2_int)
-        temp_x = temp_x << 1  # temp_x *= 2
-        fractional_add += (temp_x >= (1 << log2_int)).to(torch.int32) * 5
-        out = -1 * (log2_int * 10 + fractional_add)
-        out[zero_mask] = 99999
-        return out
-
-    def int_log_dequant_10x(self, y):
-        zero_mask = y == 99999
-        y = -y
-
-        int_part = y // 10
-        frac_part = y % 10 / 5
-
-        int_num = 1 << int_part
-        frac_num = frac_part * (1 << (int_part - 1))
-        out = (int_num + frac_num).floor()
-        out[zero_mask] = 0
-        return out
 
     def forward(self, x_hat: torch.Tensor, s_x: torch.Tensor):
         assert 0 <= x_hat.min() and x_hat.max() <= 1, f"{x_hat.min()} {x_hat.max()}"
@@ -620,16 +625,19 @@ class Log2_Int_Quantizer(nn.Module):
         x_int = round_ste.apply(x_hat / s_x)
 
         # [1] log quantization in huge domain
-        x_int_log_q = (self.int_log_quant_10x(x_int) // 10) * 10
-        x_int_log_dq = self.int_log_dequant_10x(x_int_log_q)
+        x_int_log_q = (-self.int_log_quant_10x(x_int) // 10) * -10
+        # 17 tensor([  -150,   -140,   -130,   -120,   -110,   -100,    -90,    -80,    -70,
+        #    -60,    -50,    -40,    -30,    -20,    -10,      0, 100000],
 
-        # ver2.  * Prec@1 69.454 Prec@5 89.464
+        x_int_log_dq = self.int_log_dequant_10x(x_int_log_q)
+        # 17 tensor([0.0000e+00, 1.0000e+00, 2.0000e+00, 4.0000e+00, 8.0000e+00, 1.6000e+01,
+        #             3.2000e+01, 6.4000e+01, 1.2800e+02, 2.5600e+02, 5.1200e+02, 1.0240e+03,
+        #             2.0480e+03, 4.0960e+03, 8.1920e+03, 1.6384e+04, 3.2768e+04]
+
         out = x_int_log_dq * 256 // x_int_log_dq.max()
-        if out.unique().numel() > self.n_levels:
+        while out.unique().numel() > self.n_levels:
             out = out // 2
         out = out.clamp(0, 255)
-
-        # print(out.unique().numel(), out.unique())
         # 10 tensor([  0.,   1.,   2.,   4.,   8.,  16.,  32.,  64., 128., 255.],
 
         assert (
@@ -653,42 +661,11 @@ class Log2_Int_Quantizer_nonscaling(nn.Module):
         self.n_levels = 2**self.activation_bit
         self.int_bias = torch.tensor(1.0)
 
+        self.int_log_quant_10x = int_log_quant_10x
+        self.int_log_dequant_10x = int_log_dequant_10x
+
     def __repr__(self):
         return f"{self.__class__.__name__}(activation_bit={self.activation_bit}"
-
-    def int_log_quant_10x(self, x):
-        x = x.to(torch.int32)
-        zero_mask = x == 0
-        log2_int = torch.full_like(x, -1, dtype=torch.int32)
-
-        temp_x = x.clone()
-        for i in range(15, -1, -1):
-            shift = 1 << i
-            greater_equal = temp_x >= shift
-            log2_int += greater_equal.to(torch.int32)
-            temp_x = temp_x >> greater_equal.to(torch.int32)
-
-        fractional_add = torch.zeros_like(x, dtype=torch.int32)
-
-        temp_x = x - (1 << log2_int)
-        temp_x = temp_x << 1  # temp_x *= 2
-        fractional_add += (temp_x >= (1 << log2_int)).to(torch.int32) * 5
-        out = -1 * (log2_int * 10 + fractional_add)
-        out[zero_mask] = 99999
-        return out
-
-    def int_log_dequant_10x(self, y):
-        zero_mask = y == 99999
-        y = -y
-
-        int_part = y // 10
-        frac_part = y % 10 / 5
-
-        int_num = 1 << int_part
-        frac_num = frac_part * (1 << (int_part - 1))
-        out = (int_num + frac_num).floor()
-        out[zero_mask] = 0
-        return out
 
     def forward(self, x_hat: torch.Tensor, s_x: torch.Tensor):
         assert 0 <= x_hat.min() and x_hat.max() <= 1, f"{x_hat.min()} {x_hat.max()}"
@@ -696,18 +673,15 @@ class Log2_Int_Quantizer_nonscaling(nn.Module):
         x_int = round_ste.apply(x_hat / s_x)
 
         # [1] log quantization in huge domain
-        x_int_log_q = (self.int_log_quant_10x(x_int) // 10) * 10
+        x_int_log_q = (-self.int_log_quant_10x(x_int) // 10) * -10
+        # 17 tensor([  -150,   -140,   -130,   -120,   -110,   -100,    -90,    -80,    -70,
+        #             -60,    -50,    -40,    -30,    -20,    -10,      0, 100000],
         x_int_log_dq = self.int_log_dequant_10x(x_int_log_q)
+        # 17 tensor([0.0000e+00, 1.0000e+00, 2.0000e+00, 4.0000e+00, 8.0000e+00, 1.6000e+01,
+        #             3.2000e+01, 6.4000e+01, 1.2800e+02, 2.5600e+02, 5.1200e+02, 1.0240e+03,
+        #             2.0480e+03, 4.0960e+03, 8.1920e+03, 1.6384e+04, 3.2768e+04],device='cuda:0')
 
         out = x_int_log_dq
-        while out.unique().numel() > self.n_levels:
-            out = out // 2
-
-        assert (
-            out.unique().numel() <= self.n_levels
-        ), f"{out.unique().numel(), out.unique()}"
-
-        s_x = s_x * 4
         x_hat = out * s_x
 
         return x_hat, s_x
@@ -723,42 +697,11 @@ class Log2_half_Int_Quantizer(nn.Module):
         self.n_levels = 2**self.activation_bit
         self.int_bias = torch.tensor(1.0)
 
+        self.int_log_quant_10x = int_log_quant_10x
+        self.int_log_dequant_10x = int_log_dequant_10x
+
     def __repr__(self):
         return f"{self.__class__.__name__}(activation_bit={self.activation_bit}"
-
-    def int_log_quant_10x(self, x):
-        x = x.to(torch.int32)
-        zero_mask = x == 0
-        log2_int = torch.full_like(x, -1, dtype=torch.int32)
-
-        temp_x = x.clone()
-        for i in range(15, -1, -1):
-            shift = 1 << i
-            greater_equal = temp_x >= shift
-            log2_int += greater_equal.to(torch.int32)
-            temp_x = temp_x >> greater_equal.to(torch.int32)
-
-        fractional_add = torch.zeros_like(x, dtype=torch.int32)
-
-        temp_x = x - (1 << log2_int)
-        temp_x = temp_x << 1  # temp_x *= 2
-        fractional_add += (temp_x >= (1 << log2_int)).to(torch.int32) * 5
-        out = -1 * (log2_int * 10 + fractional_add)
-        out[zero_mask] = 99999
-        return out
-
-    def int_log_dequant_10x(self, y):
-        zero_mask = y == 99999
-        y = -y
-
-        int_part = y // 10
-        frac_part = y % 10 / 5
-
-        int_num = 1 << int_part
-        frac_num = frac_part * (1 << (int_part - 1))
-        out = (int_num + frac_num).floor()
-        out[zero_mask] = 0
-        return out
 
     def forward(self, x_hat: torch.Tensor, s_x: torch.Tensor):
         assert 0 <= x_hat.min() and x_hat.max() <= 1, f"{x_hat.min()} {x_hat.max()}"
@@ -785,13 +728,8 @@ class Log2_half_Int_Quantizer(nn.Module):
         #         3.2768e+04, 4.9152e+04], device='cuda:0')
 
         # [3] [0, 255]
-        # #  * Prec@1 69.146 Prec@5 89.320
-        # x_int_log_dq = x_int_log_dq * x_int_log_dq.unique()[-16] // x_int_log_dq.max()
-        # out = x_int_log_dq.clamp(0, 255)
-
-        # ver2.  * Prec@1 69.454 Prec@5 89.464
         out = x_int_log_dq * 256 // x_int_log_dq.max()
-        if out.unique().numel() > self.n_levels:
+        while out.unique().numel() > self.n_levels:
             # print(out.unique().numel(), out.unique())
             out = out // 2
         out = out.clamp(0, 255)
@@ -807,6 +745,9 @@ class Log2_half_Int_Quantizer(nn.Module):
         return x_hat, s_x
 
 
+# BELOW IS FP LOG QUANTIZATION CODE
+# BELOW IS FP LOG QUANTIZATION CODE
+# BELOW IS FP LOG QUANTIZATION CODE
 class Log2Quantizer(nn.Module):
     """
     PyTorch Function that can be used for asymmetric quantization (also called uniform affine
