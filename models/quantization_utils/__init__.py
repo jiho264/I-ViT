@@ -9,5 +9,6 @@ from .quant_modules import (
     Log2_half_Int_Quantizer,
     Log2_Int_Quantizer,
     Log2Quantizer,
+    Log2_Int_Quantizer_nonscaling,
     LogSqrt2Quantizer,
 )

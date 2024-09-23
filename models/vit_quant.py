@@ -22,6 +22,7 @@ from .quantization_utils import (
     QuantMatMul,
     Log2_half_Int_Quantizer,
     Log2_Int_Quantizer,
+    Log2_Int_Quantizer_nonscaling,
     Log2Quantizer,
     LogSqrt2Quantizer,
 )
@@ -78,6 +79,8 @@ class Attention(nn.Module):
             self.qact_softmax = Log2_half_Int_Quantizer()
         elif attn_quant == "Log2_Int_Quantizer":
             self.qact_softmax = Log2_Int_Quantizer()
+        elif attn_quant == "Log2_Int_Quantizer_nonscaling":
+            self.qact_softmax = Log2_Int_Quantizer_nonscaling()
         elif attn_quant == "Log2Quantizer":
             self.qact_softmax = Log2Quantizer()
         elif attn_quant == "LogSqrt2Quantizer":
